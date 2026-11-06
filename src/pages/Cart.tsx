@@ -1,3 +1,5 @@
+
+import { useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
     ShoppingCart,
@@ -13,21 +15,60 @@ import {
 import { useCart } from "../context/CartContext";
 import { useStoreSettings } from "../services/shopApi";
 
-
 const Cart = () => {
     const navigate = useNavigate();
-    const { items, cartTotal, removeFromCart, updateQuantity } = useCart();
+
+    const {
+        items,
+        cartTotal,
+        removeFromCart,
+        updateQuantity,
+        isLoading,
+    } = useCart();
+
+    // Redirect logged-out users to login
+    useEffect(() => {
+        if (!localStorage.getItem("accessToken")) {
+            navigate("/login", {
+                state: { from: "/cart" },
+                replace: true,
+            });
+        }
+    }, [navigate]);
+
     // Delivery fee and free-delivery limit come from Admin -> Settings
     const { settings } = useStoreSettings();
+
     const DELIVERY_FEE = settings.deliveryFee;
     const FREE_DELIVERY_THRESHOLD = settings.freeDeliveryThreshold;
     const currency = import.meta.env.VITE_CURRENCY_SYMBOL || "Rs";
 
-    const deliveryFee = cartTotal >= FREE_DELIVERY_THRESHOLD ? 0 : DELIVERY_FEE;
-    const tax = Math.round(cartTotal * settings.taxPercent) / 100;     // same rule as the API
+    const deliveryFee =
+        cartTotal >= FREE_DELIVERY_THRESHOLD ? 0 : DELIVERY_FEE;
+
+    const tax = Math.round(cartTotal * settings.taxPercent) / 100;
     const grandTotal = cartTotal + deliveryFee + tax;
 
-    // ── Empty State ──────────────────────────────────────────────────────────
+    // Avoid displaying cart before authentication check
+    if (!localStorage.getItem("accessToken")) {
+        return null;
+    }
+
+    // Show loading while retrieving cart from Azure SQL
+    if (isLoading) {
+        return (
+            <div className="min-h-screen bg-app-cream flex items-center justify-center">
+                <div className="text-center">
+                    <ShoppingCart className="size-10 text-app-orange mx-auto mb-3 animate-pulse" />
+                    <p className="text-sm text-zinc-500">
+                        Loading your cart...
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    // Empty State
     if (items.length === 0) {
         return (
             <div className="min-h-screen bg-app-cream flex items-center justify-center px-4">
@@ -35,22 +76,28 @@ const Cart = () => {
                     <div className="size-20 rounded-full bg-orange-50 flex-center mx-auto mb-6">
                         <ShoppingCart className="size-10 text-app-orange opacity-70" />
                     </div>
-                    <h2 className="text-2xl font-bold text-zinc-900 mb-2">Your cart is empty</h2>
+
+                    <h2 className="text-2xl font-bold text-zinc-900 mb-2">
+                        Your cart is empty
+                    </h2>
+
                     <p className="text-zinc-500 text-sm mb-8">
                         Add some products to your cart to continue shopping.
                     </p>
+
                     <Link
                         to="/products"
                         className="inline-flex items-center gap-2 px-6 py-3 bg-app-orange hover:bg-app-orange-dark text-white font-semibold rounded-2xl transition-colors"
                     >
-                        <ShoppingBag className="size-4" /> Continue Shopping
+                        <ShoppingBag className="size-4" />
+                        Continue Shopping
                     </Link>
                 </div>
             </div>
         );
     }
 
-    // ── Filled Cart ──────────────────────────────────────────────────────────
+    // Filled Cart
     return (
         <div className="min-h-screen bg-app-cream pb-20">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -61,10 +108,14 @@ const Cart = () => {
                         onClick={() => navigate(-1)}
                         className="flex items-center gap-1.5 text-zinc-500 hover:text-app-green transition-colors"
                     >
-                        <ArrowLeft className="size-4" /> Back
+                        <ArrowLeft className="size-4" />
+                        Back
                     </button>
+
                     <ChevronRight className="size-3 text-zinc-400" />
-                    <span className="text-zinc-700 font-medium">Shopping Cart</span>
+                    <span className="text-zinc-700 font-medium">
+                        Shopping Cart
+                    </span>
                 </div>
 
                 {/* Page Title */}
@@ -73,6 +124,7 @@ const Cart = () => {
                         <ShoppingCart className="size-7 text-app-orange" />
                         Shopping Cart
                     </h1>
+
                     <p className="text-sm text-zinc-500 mt-1">
                         {items.length} {items.length === 1 ? "item" : "items"} in your cart
                     </p>
@@ -81,7 +133,7 @@ const Cart = () => {
                 {/* Main Layout */}
                 <div className="flex flex-col lg:flex-row gap-6 items-start">
 
-                    {/* ── Left: Cart Items ───────────────────────────────── */}
+                    {/* Left: Cart Items */}
                     <div className="flex-1 w-full space-y-4">
                         {items.map((item) => {
                             const subtotal = item.product.price * item.quantity;
@@ -112,11 +164,12 @@ const Cart = () => {
                                         >
                                             {item.product.name}
                                         </Link>
+
                                         <p className="text-xs text-zinc-500 mt-0.5">
                                             {currency} {item.product.price.toFixed(1)} / {item.product.unit}
                                         </p>
 
-                                        {/* Mobile: quantity + subtotal inline */}
+                                        {/* Mobile Quantity */}
                                         <div className="flex items-center justify-between mt-3 sm:hidden">
                                             <QuantityStepper
                                                 qty={item.quantity}
@@ -127,13 +180,14 @@ const Cart = () => {
                                                     updateQuantity(productId, item.quantity + 1)
                                                 }
                                             />
+
                                             <span className="text-sm font-bold text-app-green">
                                                 {currency} {subtotal.toFixed(1)}
                                             </span>
                                         </div>
                                     </div>
 
-                                    {/* Desktop: quantity, subtotal, remove */}
+                                    {/* Desktop Quantity */}
                                     <div className="hidden sm:flex items-center gap-6 shrink-0">
                                         <QuantityStepper
                                             qty={item.quantity}
@@ -146,14 +200,17 @@ const Cart = () => {
                                         />
 
                                         <div className="w-24 text-right">
-                                            <p className="text-xs text-zinc-400 mb-0.5">Subtotal</p>
+                                            <p className="text-xs text-zinc-400 mb-0.5">
+                                                Subtotal
+                                            </p>
+
                                             <p className="text-base font-bold text-app-green">
                                                 {currency} {subtotal.toFixed(1)}
                                             </p>
                                         </div>
                                     </div>
 
-                                    {/* Remove button */}
+                                    {/* Remove Button */}
                                     <button
                                         onClick={() => removeFromCart(productId)}
                                         className="shrink-0 size-8 rounded-xl bg-red-50 hover:bg-red-100 text-red-500 flex-center transition-colors"
@@ -171,22 +228,28 @@ const Cart = () => {
                                 to="/products"
                                 className="inline-flex items-center gap-2 text-sm font-medium text-app-green hover:text-app-green-light transition-colors"
                             >
-                                <ArrowLeft className="size-4" /> Continue Shopping
+                                <ArrowLeft className="size-4" />
+                                Continue Shopping
                             </Link>
                         </div>
                     </div>
 
-                    {/* ── Right: Cart Summary ────────────────────────────── */}
+                    {/* Right: Cart Summary */}
                     <div className="w-full lg:w-80 xl:w-96 shrink-0">
                         <div className="bg-white rounded-2xl border border-app-border shadow-xs p-5 sm:p-6 sticky top-20 space-y-5">
+
                             <h2 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
-                                <Tag className="size-5 text-app-orange" /> Cart Summary
+                                <Tag className="size-5 text-app-orange" />
+                                Cart Summary
                             </h2>
 
-                            {/* Line items */}
+                            {/* Line Items */}
                             <div className="space-y-3 text-sm">
                                 <div className="flex justify-between text-zinc-600">
-                                    <span>Subtotal ({items.reduce((s, i) => s + i.quantity, 0)} items)</span>
+                                    <span>
+                                        Subtotal ({items.reduce((s, i) => s + i.quantity, 0)} items)
+                                    </span>
+
                                     <span className="font-medium text-zinc-900">
                                         {currency} {cartTotal.toFixed(1)}
                                     </span>
@@ -194,10 +257,14 @@ const Cart = () => {
 
                                 <div className="flex justify-between text-zinc-600">
                                     <span className="flex items-center gap-1.5">
-                                        <Truck className="size-3.5 text-zinc-400" /> Delivery Fee
+                                        <Truck className="size-3.5 text-zinc-400" />
+                                        Delivery Fee
                                     </span>
+
                                     {deliveryFee === 0 ? (
-                                        <span className="text-app-success font-semibold">FREE</span>
+                                        <span className="text-app-success font-semibold">
+                                            FREE
+                                        </span>
                                     ) : (
                                         <span className="font-medium text-zinc-900">
                                             {currency} {deliveryFee.toFixed(1)}
@@ -208,7 +275,10 @@ const Cart = () => {
                                 {tax > 0 && (
                                     <div className="flex justify-between text-zinc-600">
                                         <span>Tax ({settings.taxPercent}%)</span>
-                                        <span className="font-medium text-zinc-900">{currency} {tax.toFixed(1)}</span>
+
+                                        <span className="font-medium text-zinc-900">
+                                            {currency} {tax.toFixed(1)}
+                                        </span>
                                     </div>
                                 )}
 
@@ -219,29 +289,34 @@ const Cart = () => {
                                 )}
                             </div>
 
+                            {/* Grand Total */}
                             <div className="border-t border-app-border pt-4 flex justify-between items-center">
-                                <span className="text-base font-bold text-zinc-900">Grand Total</span>
+                                <span className="text-base font-bold text-zinc-900">
+                                    Grand Total
+                                </span>
+
                                 <span className="text-xl font-bold text-app-green">
                                     {currency} {grandTotal.toFixed(1)}
                                 </span>
                             </div>
 
-                            {/* Savings callout */}
+                            {/* Free Delivery Message */}
                             {deliveryFee === 0 && (
                                 <div className="bg-emerald-50 border border-emerald-200/60 rounded-xl p-3 text-xs font-semibold text-emerald-800 text-center">
                                     🎉 You qualify for free delivery!
                                 </div>
                             )}
 
-                            {/* Checkout Button */}
+                            {/* Checkout */}
                             <Link
                                 to="/checkout"
                                 className="w-full py-3.5 bg-app-green hover:bg-app-green-light text-white font-semibold rounded-2xl flex-center gap-2 text-sm transition-colors shadow-xs"
                             >
-                                Proceed to Checkout <ChevronRight className="size-4" />
+                                Proceed to Checkout
+                                <ChevronRight className="size-4" />
                             </Link>
 
-                            {/* Trust badges */}
+                            {/* Trust Badges */}
                             <div className="flex items-center justify-center gap-4 text-[11px] text-zinc-400 pt-1">
                                 <span>🔒 Secure checkout</span>
                                 <span>•</span>
@@ -255,15 +330,18 @@ const Cart = () => {
     );
 };
 
-// ── Quantity Stepper Sub-component ────────────────────────────────────────────
-
+// Quantity Stepper
 interface StepperProps {
     qty: number;
     onDecrease: () => void;
     onIncrease: () => void;
 }
 
-const QuantityStepper = ({ qty, onDecrease, onIncrease }: StepperProps) => (
+const QuantityStepper = ({
+    qty,
+    onDecrease,
+    onIncrease,
+}: StepperProps) => (
     <div className="flex items-center gap-2 bg-zinc-50 border border-app-border rounded-xl p-1">
         <button
             onClick={onDecrease}
@@ -272,7 +350,11 @@ const QuantityStepper = ({ qty, onDecrease, onIncrease }: StepperProps) => (
         >
             <Minus className="size-3.5" />
         </button>
-        <span className="text-sm font-bold text-zinc-900 w-6 text-center select-none">{qty}</span>
+
+        <span className="text-sm font-bold text-zinc-900 w-6 text-center select-none">
+            {qty}
+        </span>
+
         <button
             onClick={onIncrease}
             className="size-8 rounded-lg bg-app-orange hover:bg-app-orange-dark text-white flex-center transition-all shadow-2xs active:scale-95"

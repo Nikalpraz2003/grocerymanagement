@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom"
 import { assets, appPromoBannerData } from "../../assets/assets"
 
 const AppPromoBanner = () => {
@@ -6,24 +7,31 @@ const AppPromoBanner = () => {
     my-14 bg-green-950 rounded-2xl" >
 
         {/* Left side */}
-        <div className="flex flex-col md:flex-row 
+        <div className="flex flex-col md:flex-row
         items-center justify-between gap-8 xl:px-10">
             <div className="text-center md:text-left">
                 <h2 className="font-serif text-3xl sm:text-4xl text-white mb-3">{appPromoBannerData.title}</h2>
                 <p className="text-white/70 mb-6 max-w-md">{appPromoBannerData.description}</p>
                 <div className="flex flex-wrap gap-3 justify-center md:justify-start">
-                  <button className="px-6 py-3 bg-white text-green-950
-                  font-semibold rounded-xl hover:bg-orange-100">App Store</button>
-                  <button className="px-6 py-3 bg-white/10 text-white
-                  font-semibold rounded-xl hover:bg-orange/20 transition-colors border border-white/20">Google Play</button>
+                  <Link
+                    to="/coming-soon?store=App%20Store"
+                    className="px-6 py-3 bg-white text-green-950
+                    font-semibold rounded-xl hover:bg-orange-100 transition-colors"
+                  >
+                    App Store
+                  </Link>
+                  <Link
+                    to="/coming-soon?store=Google%20Play"
+                    className="px-6 py-3 bg-white/10 text-white
+                    font-semibold rounded-xl hover:bg-white/20 transition-colors border border-white/20"
+                  >
+                    Google Play
+                  </Link>
                 </div>
                 </div>
               <img src={assets.delivery_truck} alt="Delivery Truck" className="max-w-60
               sm:max-w-120 xl:pr-10" />
         </div>
-
-
-        
     </section>
   )
 }

@@ -1,188 +1,258 @@
-import { createContext, useContext, useReducer, useEffect, useCallback } from "react";
+import {
+    createContext,
+    useContext,
+    useEffect,
+    useState,
+    useCallback,
+} from "react";
+
 import type { ReactNode } from "react";
 import type { Product } from "../types";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { api } from "../services/authServices";
 
 export interface CartItem {
     product: Product;
     quantity: number;
 }
 
-interface CartState {
-    items: CartItem[];
+interface CartApiItem {
+    id: number;
+    product: {
+        _id: string;
+        id: string;
+        name: string;
+        price: number;
+        image: string;
+        unit: string;
+    };
+    quantity: number;
 }
 
-type CartAction =
-    | { type: "ADD_TO_CART"; payload: Product }
-    | { type: "ADD_TO_CART_WITH_QTY"; payload: { product: Product; quantity: number } }
-    | { type: "REMOVE_FROM_CART"; payload: string }   // product _id
-    | { type: "UPDATE_QUANTITY"; payload: { id: string; quantity: number } }
-    | { type: "CLEAR_CART" }
-    | { type: "LOAD_CART"; payload: CartItem[] };
+interface CartApiResponse {
+    id: number;
+    userId: string;
+    username?: string;
+    items: CartApiItem[];
+}
 
 interface CartContextValue {
     items: CartItem[];
     cartCount: number;
     cartTotal: number;
-    addToCart: (product: Product) => void;
-    addToCartWithQty: (product: Product, quantity: number) => void;
-    removeFromCart: (productId: string) => void;
-    updateQuantity: (productId: string, quantity: number) => void;
-    clearCart: () => void;
+    isLoading: boolean;
+
+    addToCart: (product: Product) => Promise<void>;
+
+    addToCartWithQty: (
+        product: Product,
+        quantity: number
+    ) => Promise<void>;
+
+    removeFromCart: (productId: string) => Promise<void>;
+
+    updateQuantity: (
+        productId: string,
+        quantity: number
+    ) => Promise<void>;
+
+    clearCart: () => Promise<void>;
+
     getItemQuantity: (productId: string) => number;
 }
 
-// ─── Storage Key ──────────────────────────────────────────────────────────────
-
-const CART_STORAGE_KEY = "pasalmandu_cart";
-
-function loadCartFromStorage(): CartItem[] {
-    try {
-        const raw = localStorage.getItem(CART_STORAGE_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw) as CartItem[];
-        // Basic validation
-        if (!Array.isArray(parsed)) return [];
-        // Products from the database have number ids ("21"); old demo items had long text ids and can't be ordered
-        return parsed.filter(
-            (item) => item && item.product && /^\d+$/.test(String(item.product._id)) && typeof item.quantity === "number" && item.quantity > 0
-        );
-    } catch {
-        return [];
-    }
-}
-
-function saveCartToStorage(items: CartItem[]) {
-    try {
-        localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items));
-    } catch {
-        // silently fail if localStorage is unavailable
-    }
-}
-
-// ─── Reducer ──────────────────────────────────────────────────────────────────
-
-function cartReducer(state: CartState, action: CartAction): CartState {
-    switch (action.type) {
-        case "LOAD_CART":
-            return { items: action.payload };
-
-        case "ADD_TO_CART": {
-            const existing = state.items.find((i) => i.product._id === action.payload._id);
-            if (existing) {
-                return {
-                    items: state.items.map((i) =>
-                        i.product._id === action.payload._id
-                            ? { ...i, quantity: i.quantity + 1 }
-                            : i
-                    ),
-                };
-            }
-            return { items: [...state.items, { product: action.payload, quantity: 1 }] };
-        }
-
-        case "ADD_TO_CART_WITH_QTY": {
-            const { product, quantity } = action.payload;
-            const existing = state.items.find((i) => i.product._id === product._id);
-            if (existing) {
-                return {
-                    items: state.items.map((i) =>
-                        i.product._id === product._id
-                            ? { ...i, quantity: i.quantity + quantity }
-                            : i
-                    ),
-                };
-            }
-            return { items: [...state.items, { product, quantity }] };
-        }
-
-        case "REMOVE_FROM_CART":
-            return { items: state.items.filter((i) => i.product._id !== action.payload) };
-
-        case "UPDATE_QUANTITY": {
-            const { id, quantity } = action.payload;
-            if (quantity <= 0) {
-                return { items: state.items.filter((i) => i.product._id !== id) };
-            }
-            return {
-                items: state.items.map((i) =>
-                    i.product._id === id ? { ...i, quantity } : i
-                ),
-            };
-        }
-
-        case "CLEAR_CART":
-            return { items: [] };
-
-        default:
-            return state;
-    }
-}
-
-// ─── Context ──────────────────────────────────────────────────────────────────
-
 const CartContext = createContext<CartContextValue | null>(null);
 
-// ─── Provider ─────────────────────────────────────────────────────────────────
+const isLoggedIn = () => {
+    return Boolean(localStorage.getItem("accessToken"));
+};
 
-export const CartProvider = ({ children }: { children: ReactNode }) => {
-    const [state, dispatch] = useReducer(cartReducer, { items: [] });
+const getProductId = (product: Product) => {
+    return String(product._id || product.id || "");
+};
 
-    // Load from localStorage on mount
-    useEffect(() => {
-        const saved = loadCartFromStorage();
-        if (saved.length > 0) {
-            dispatch({ type: "LOAD_CART", payload: saved });
+interface CartProviderProps {
+    children: ReactNode;
+}
+
+export const CartProvider = ({ children }: CartProviderProps) => {
+    const [items, setItems] = useState<CartItem[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+
+    // Load the logged-in user's cart from the backend.
+    const loadCart = useCallback(async () => {
+        if (!isLoggedIn()) {
+            setItems([]);
+            setIsLoading(false);
+            return;
+        }
+
+        try {
+            setIsLoading(true);
+
+            const response = await api.get("/api/cart");
+
+            // Your existing Axios response interceptor
+            // already returns response.data.
+            const cart = response as unknown as CartApiResponse;
+
+            const mappedItems: CartItem[] = (
+                cart.items || []
+            ).map((item) => ({
+                product: item.product as unknown as Product,
+                quantity: item.quantity,
+            }));
+
+            setItems(mappedItems);
+        } catch (error) {
+            console.error("Failed to load cart:", error);
+            setItems([]);
+        } finally {
+            setIsLoading(false);
         }
     }, []);
 
-    // Persist to localStorage on every change
+    // Load cart when the application starts.
     useEffect(() => {
-        saveCartToStorage(state.items);
-    }, [state.items]);
+        void loadCart();
+    }, [loadCart]);
 
-    // Derived values
-    const cartCount = state.items.reduce((sum, item) => sum + item.quantity, 0);
-    const cartTotal = state.items.reduce(
-        (sum, item) => sum + item.product.price * item.quantity,
+    // Synchronize cart with existing login/logout events.
+    useEffect(() => {
+        const handleUserUpdate = () => {
+            if (isLoggedIn()) {
+                void loadCart();
+            } else {
+                setItems([]);
+                setIsLoading(false);
+            }
+        };
+
+        window.addEventListener(
+            "pasalmandu:user-updated",
+            handleUserUpdate
+        );
+
+        return () => {
+            window.removeEventListener(
+                "pasalmandu:user-updated",
+                handleUserUpdate
+            );
+        };
+    }, [loadCart]);
+
+    // Add a product.
+    const addToCartWithQty = async (
+        product: Product,
+        quantity: number
+    ) => {
+        if (!isLoggedIn()) {
+            window.location.assign("/login");
+            return;
+        }
+
+        const productId = Number(getProductId(product));
+
+        if (
+            !Number.isInteger(productId) ||
+            productId <= 0 ||
+            quantity <= 0
+        ) {
+            return;
+        }
+
+        await api.post("/api/cart/items", {
+            productId,
+            quantity,
+        });
+
+        await loadCart();
+    };
+
+    const addToCart = async (product: Product) => {
+        await addToCartWithQty(product, 1);
+    };
+
+    // Update quantity.
+    const updateQuantity = async (
+        productId: string,
+        quantity: number
+    ) => {
+        if (!isLoggedIn()) {
+            window.location.assign("/login");
+            return;
+        }
+
+        const id = Number(productId);
+
+        if (!Number.isInteger(id) || id <= 0) return;
+
+        if (quantity <= 0) {
+            await removeFromCart(productId);
+            return;
+        }
+
+        await api.put(`/api/cart/items/${id}`, {
+            quantity,
+        });
+
+        await loadCart();
+    };
+
+    // Remove one product.
+    const removeFromCart = async (productId: string) => {
+        if (!isLoggedIn()) {
+            window.location.assign("/login");
+            return;
+        }
+
+        const id = Number(productId);
+
+        if (!Number.isInteger(id) || id <= 0) return;
+
+        await api.delete(`/api/cart/items/${id}`);
+
+        await loadCart();
+    };
+
+    // Clear all items, preserving the cart record.
+    const clearCart = async () => {
+        if (!isLoggedIn()) {
+            setItems([]);
+            return;
+        }
+
+        await api.delete("/api/cart");
+
+        setItems([]);
+    };
+
+    // Cart calculations.
+    const cartCount = items.reduce(
+        (total, item) => total + item.quantity,
         0
     );
 
-    // Actions
-    const addToCart = useCallback((product: Product) => {
-        dispatch({ type: "ADD_TO_CART", payload: product });
-    }, []);
-
-    const addToCartWithQty = useCallback((product: Product, quantity: number) => {
-        dispatch({ type: "ADD_TO_CART_WITH_QTY", payload: { product, quantity } });
-    }, []);
-
-    const removeFromCart = useCallback((productId: string) => {
-        dispatch({ type: "REMOVE_FROM_CART", payload: productId });
-    }, []);
-
-    const updateQuantity = useCallback((productId: string, quantity: number) => {
-        dispatch({ type: "UPDATE_QUANTITY", payload: { id: productId, quantity } });
-    }, []);
-
-    const clearCart = useCallback(() => {
-        dispatch({ type: "CLEAR_CART" });
-    }, []);
-
-    const getItemQuantity = useCallback(
-        (productId: string): number => {
-            return state.items.find((i) => i.product._id === productId)?.quantity ?? 0;
-        },
-        [state.items]
+    const cartTotal = items.reduce(
+        (total, item) =>
+            total + item.product.price * item.quantity,
+        0
     );
+
+    const getItemQuantity = (productId: string) => {
+        const item = items.find(
+            (item) => getProductId(item.product) === String(productId)
+        );
+
+        return item?.quantity ?? 0;
+    };
 
     return (
         <CartContext.Provider
             value={{
-                items: state.items,
+                items,
                 cartCount,
                 cartTotal,
+                isLoading,
                 addToCart,
                 addToCartWithQty,
                 removeFromCart,
@@ -196,12 +266,18 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     );
 };
 
-// ─── Hook ─────────────────────────────────────────────────────────────────────
+export const useCart = () => {
+    const context = useContext(CartContext);
 
-export const useCart = (): CartContextValue => {
-    const ctx = useContext(CartContext);
-    if (!ctx) {
-        throw new Error("useCart must be used inside <CartProvider>");
+    if (!context) {
+        throw new Error(
+            "useCart must be used inside CartProvider"
+        );
     }
-    return ctx;
+
+    return context;
+};
+
+export const useOptionalCart = () => {
+    return useContext(CartContext);
 };

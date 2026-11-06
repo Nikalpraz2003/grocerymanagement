@@ -17,6 +17,7 @@ const Login = () => {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [success, setSuccess] = useState("")
   const location = useLocation()
 
   // Page the user tried to open before being sent to /login (set by ProtectedRoute)
@@ -39,19 +40,27 @@ const Login = () => {
     goAfterLogin(response.user)
   }
 
-  // Handle Register (the API logs the new user in straight away)
+  // Handle Register: create the account, then show the login form (no automatic login)
   const handleRegister = async () => {
     if (!name.trim()) throw new Error("Full name is required")
     if (password.length < 6) throw new Error("Password must be at least 6 characters")
     if (password !== confirmPassword) throw new Error("Passwords do not match")
 
-    const response = await authService.register(email.trim(), password, name.trim())
-    goAfterLogin(response.user)
+    await authService.register(email.trim(), password, name.trim())
+
+    // Switch to the login form. The email stays filled in, the passwords are cleared.
+    setIsLoginState(true)
+    setName("")
+    setPassword("")
+    setConfirmPassword("")
+    setSuccess("Account created. Please log in.")
+    setLoading(false)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
+    setSuccess("")
     setLoading(true)
     try {
       if (isLoginState) await handleLogin()
@@ -68,6 +77,7 @@ const Login = () => {
   const switchMode = () => {
     setIsLoginState(!isLoginState)
     setError("")
+    setSuccess("")
     setName("")
     setPassword("")
     setConfirmPassword("")
@@ -106,6 +116,13 @@ const Login = () => {
               {isLoginState ? "Access your account" : "Create a new account"}
             </p>
           </div>
+
+          {/* Success Message */}
+          {success && (
+            <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-800 rounded-lg text-sm">
+              {success}
+            </div>
+          )}
 
           {/* Error Message */}
           {error && (
@@ -177,13 +194,12 @@ const Login = () => {
 
             {isLoginState && (
               <div className="text-right">
-                <button
-                  type="button"
+                <Link
+                  to="/forgot-password"
                   className="text-sm font-medium text-app-green hover:underline"
-                  disabled={loading}
                 >
                   Forgot password?
-                </button>
+                </Link>
               </div>
             )}
 

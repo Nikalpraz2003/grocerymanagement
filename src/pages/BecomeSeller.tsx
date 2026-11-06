@@ -874,6 +874,12 @@ const BecomeSeller = () => {
                                         className="w-full sm:w-auto px-6 py-3 bg-app-green hover:bg-emerald-950 text-white font-semibold text-xs sm:text-sm rounded-xl transition-colors"
                                     >
                                         Back to Home
+                                        <Link
+                                        to="/my-seller-application"
+                                         className="w-full sm:w-auto px-6 py-3 bg-app-orange hover:bg-app-orange-dark text-white font-semibold text-xs sm:text-sm rounded-xl transition-colors"
+                                            >
+                                          Track My Application
+                                            </Link>
                                     </Link>
                                     <button
                                         onClick={() => setSubmittedData(null)}

@@ -5,9 +5,16 @@ import { ProtectedRoute } from "./components/ProtectedRoute"
 import AppLayout from "./components/layout/AppLayout"
 import AdminLayout from "./components/layout/AdminLayout"
 import VendorLayout from "./components/layout/VendorLayout"
+import ComingSoon from "./pages/ComingSoon"
+import VendorStoreProfile from "./pages/vendor/VendorStoreProfile";
+import VendorStoreSettings from "./pages/vendor/VendorStoreSettings";
+import MySellerApplication from "./pages/MySellerApplication";
+import ResubmitSellerApplication from "./pages/ResubmitSellerApplication";
 
 // Shop pages
 import Login from "./pages/Login"
+import ForgotPassword from "./pages/ForgotPassword"
+import ResetPassword from "./pages/ResetPassword"
 import Home from "./pages/Home"
 import Products from "./pages/Products"
 import ProductPage from "./pages/ProductPage"
@@ -54,11 +61,14 @@ function App() {
         <Toaster position="top-center" />
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
 
           {/* Shop: navbar + footer around every page */}
           <Route element={<AppLayout />}>
             <Route path="/" element={<Home />} />
             <Route path="/products" element={<Products />} />
+            <Route path="/coming-soon" element={<ComingSoon />} />
             <Route path="/product/:id" element={<ProductPage />} />
             <Route path="/deals" element={<FlashDeals />} />
             <Route path="/search" element={<SearchResults />} />
@@ -71,7 +81,18 @@ function App() {
             <Route path="/profile" element={<Protected><Profile /></Protected>} />
             <Route path="/payment/:provider" element={<Protected><PaymentResult /></Protected>} />
           </Route>
+<Route
+    path="/my-seller-application"
+    element={<MySellerApplication />}
+/>
+<Route
+  path="/my-seller-application/resubmit"
+  element={<ResubmitSellerApplication />}
+/>
 
+<Route path="/vendor" element={<VendorLayout />}>
+    {/* Keep all your existing vendor routes here */}
+</Route>
           {/* Admin: sidebar around every admin page, Admin role only */}
           <Route
             path="/admin"
@@ -111,6 +132,8 @@ function App() {
             <Route path="products" element={<VendorProducts />} />
             <Route path="inventory" element={<VendorInventory />} />
             <Route path="earnings" element={<VendorEarnings />} />
+            <Route path="store-profile" element={<VendorStoreProfile />} />
+            <Route path="store-settings" element={<VendorStoreSettings />} />
           </Route>
 
           {/* Anything else goes home (keep this last) */}

@@ -2,6 +2,7 @@ import { Outlet } from "react-router-dom";
 import Banner from "./Banner";
 import Navbar from "./Navbar";
 import Footer from "./Footer";
+import ChatbotWidget from "../common/ChatbotWidget";
 
 const AppLayout = () => {
     return (
@@ -12,6 +13,7 @@ const AppLayout = () => {
                 <Outlet />
             </main>
             <Footer />
+            <ChatbotWidget />
         </>
     );
 };

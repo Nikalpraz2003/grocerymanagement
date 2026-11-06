@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "react-hot-toast";
+import { isAxiosError } from "axios";
+import authService, { api } from "../services/authServices";
 import {
     ArrowLeftIcon,
     CalendarDaysIcon,
+    CameraIcon,
     ChevronRightIcon,
     EyeIcon,
     EyeOffIcon,
@@ -15,6 +18,7 @@ import {
     PhoneIcon,
     SaveIcon,
     ShieldCheckIcon,
+    Trash2Icon,
     UserIcon,
     XIcon,
 } from "lucide-react";
@@ -26,29 +30,48 @@ interface ProfileDetails {
     age: string;
     gender: string;
     dateOfBirth: string;
+    avatar: string;
 }
 
-const DEFAULT_PROFILE: ProfileDetails = {
-    name: "Nikal Prajapati",
-    email: "nikal@example.com",
-    phone: "98XXXXXXXX",
-    age: "23",
-    gender: "Male",
-    dateOfBirth: "2003-05-15",
-};
+// Shape returned by GET/PUT /api/profile and GET /api/auth/me
+interface ApiProfile {
+    name?: string;
+    email?: string;
+    phone?: string;
+    age?: number | null;
+    gender?: string;
+    dateOfBirth?: string | null;
+    avatar?: string;
+}
 
-const PROFILE_STORAGE_KEY = "pasalmandu-profile-details";
+const EMPTY_PROFILE: ProfileDetails = { name: "", email: "", phone: "", age: "", gender: "", dateOfBirth: "", avatar: "" };
+
+const toProfile = (u: ApiProfile): ProfileDetails => ({
+    name: u.name ?? "",
+    email: u.email ?? "",
+    phone: u.phone ?? "",
+    age: u.age != null ? String(u.age) : "",
+    gender: u.gender ?? "",
+    dateOfBirth: u.dateOfBirth ?? "",
+    avatar: u.avatar ?? "",
+});
+
+const errorMessage = (error: unknown, fallback: string) =>
+    (isAxiosError(error) && error.response?.data?.message) || fallback;
+
+// The API gives a path like /api/profile/avatar/<id>/<file>.jpg; the browser needs the full address
+const photoUrl = (avatar: string) =>
+    !avatar ? "" : /^https?:/i.test(avatar) ? avatar : `${import.meta.env.VITE_API_BASE_URL ?? ""}${avatar}`;
 
 const Profile = () => {
     const navigate = useNavigate();
+
+    // Start with the logged-in user's saved name/email/phone, then load full details from the API
     const [profile, setProfile] = useState<ProfileDetails>(() => {
-        try {
-            const saved = localStorage.getItem(PROFILE_STORAGE_KEY);
-            return saved ? { ...DEFAULT_PROFILE, ...JSON.parse(saved) } : DEFAULT_PROFILE;
-        } catch {
-            return DEFAULT_PROFILE;
-        }
+        const user = authService.getCurrentUser();
+        return user ? { ...EMPTY_PROFILE, name: user.name, email: user.email, phone: user.phone, avatar: user.avatar } : EMPTY_PROFILE;
     });
+    const [saving, setSaving] = useState(false);
 
     const [draft, setDraft] = useState(profile);
     const [editingProfile, setEditingProfile] = useState(false);
@@ -60,9 +83,79 @@ const Profile = () => {
     const [passwordForm, setPasswordForm] = useState({ current: "", next: "", confirm: "" });
     const [emailForm, setEmailForm] = useState({ email: "", password: "" });
 
+    // Keep the edit form in sync whenever the saved profile changes
+    const applyProfile = (next: ProfileDetails) => {
+        setProfile(next);
+        setDraft(next);
+    };
+
+    // ---------- Profile photo ----------
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+    const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = ""; // lets the user pick the same file again later
+        if (!file) return;
+        if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
+            toast.error("Please choose a JPG, PNG or WEBP image.");
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            toast.error("The photo must be smaller than 5 MB.");
+            return;
+        }
+
+        const form = new FormData();
+        form.append("file", file);
+
+        setUploadingPhoto(true);
+        try {
+            // The Content-Type line is required: your api instance sends JSON by default,
+            // which would turn the file into text.
+            const u = (await api.post("/api/profile/avatar", form, {
+                headers: { "Content-Type": "multipart/form-data" },
+            })) as unknown as ApiProfile;
+            applyProfile(toProfile(u));
+            await authService.me().catch(() => undefined); // keep the saved login user up to date
+            toast.success("Profile photo updated.");
+        } catch (error) {
+            toast.error(errorMessage(error, "Could not upload your photo."));
+        } finally {
+            setUploadingPhoto(false);
+        }
+    };
+
+    const handlePhotoRemove = async () => {
+        setUploadingPhoto(true);
+        try {
+            const u = (await api.delete("/api/profile/avatar")) as unknown as ApiProfile;
+            applyProfile(toProfile(u));
+            await authService.me().catch(() => undefined);
+            toast.success("Profile photo removed.");
+        } catch (error) {
+            toast.error(errorMessage(error, "Could not remove your photo."));
+        } finally {
+            setUploadingPhoto(false);
+        }
+    };
+
+    // Load THIS user's profile from the database
     useEffect(() => {
-        setDraft(profile);
-    }, [profile]);
+        localStorage.removeItem("pasalmandu-profile-details"); // old demo data shared by every user
+        let cancelled = false;
+        (async () => {
+            try {
+                const u = (await api.get("/api/profile")) as unknown as ApiProfile;
+                if (!cancelled) applyProfile(toProfile(u));
+            } catch (error) {
+                if (!cancelled) toast.error(errorMessage(error, "Could not load your profile."));
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const passwordStrength = useMemo(() => {
         const password = passwordForm.next;
@@ -78,10 +171,11 @@ const Profile = () => {
         return { label: "Strong", width: "w-full" };
     }, [passwordForm.next]);
 
-    const handleProfileSave = (e: React.FormEvent) => {
+    const handleProfileSave = async (e: React.FormEvent) => {
         e.preventDefault();
-        const age = Number(draft.age);
-        if (!draft.name.trim()) {
+        if (saving) return;
+        const age = draft.age.trim() === "" ? null : Number(draft.age);
+        if (draft.name.trim().length < 2) {
             toast.error("Please enter your name.");
             return;
         }
@@ -89,19 +183,35 @@ const Profile = () => {
             toast.error("Please enter your phone number.");
             return;
         }
-        if (!Number.isInteger(age) || age < 13 || age > 120) {
+        if (age !== null && (!Number.isInteger(age) || age < 13 || age > 120)) {
             toast.error("Please enter a valid age between 13 and 120.");
             return;
         }
 
-        setProfile(draft);
-        localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(draft));
-        setEditingProfile(false);
-        toast.success("Profile updated successfully.");
+        setSaving(true);
+        try {
+            const u = (await api.put("/api/profile", {
+                name: draft.name.trim(),
+                phone: draft.phone.trim(),
+                age,
+                gender: draft.gender,
+                dateOfBirth: draft.dateOfBirth || null,
+                avatar: profile.avatar,
+            })) as unknown as ApiProfile;
+            applyProfile(toProfile(u));
+            await authService.me().catch(() => undefined); // refresh the name shown in the navbar
+            setEditingProfile(false);
+            toast.success("Profile updated successfully.");
+        } catch (error) {
+            toast.error(errorMessage(error, "Could not save your profile."));
+        } finally {
+            setSaving(false);
+        }
     };
 
-    const handlePasswordChange = (e: React.FormEvent) => {
+    const handlePasswordChange = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (saving) return;
         if (!passwordForm.current) {
             toast.error("Enter your current password.");
             return;
@@ -119,17 +229,29 @@ const Profile = () => {
             return;
         }
 
-        // Frontend-only for now. Connect this action to the backend later.
-        setPasswordForm({ current: "", next: "", confirm: "" });
-        setShowPassword(false);
-        setShowNewPassword(false);
-        setShowConfirmPassword(false);
-        setShowPasswordModal(false);
-        toast.success("Password changed successfully.");
+        setSaving(true);
+        try {
+            await api.put("/api/auth/change-password", {
+                currentPassword: passwordForm.current,
+                newPassword: passwordForm.next,
+                confirmPassword: passwordForm.confirm,
+            });
+            setPasswordForm({ current: "", next: "", confirm: "" });
+            setShowPassword(false);
+            setShowNewPassword(false);
+            setShowConfirmPassword(false);
+            setShowPasswordModal(false);
+            toast.success("Password changed successfully.");
+        } catch (error) {
+            toast.error(errorMessage(error, "Could not change your password."));
+        } finally {
+            setSaving(false);
+        }
     };
 
-    const handleEmailChange = (e: React.FormEvent) => {
+    const handleEmailChange = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (saving) return;
         const nextEmail = emailForm.email.trim().toLowerCase();
         if (!/^\S+@\S+\.\S+$/.test(nextEmail)) {
             toast.error("Please enter a valid email address.");
@@ -144,13 +266,24 @@ const Profile = () => {
             return;
         }
 
-        const updated = { ...profile, email: nextEmail };
-        setProfile(updated);
-        setDraft(updated);
-        localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(updated));
-        setEmailForm({ email: "", password: "" });
-        setShowEmailModal(false);
-        toast.success("Email address updated successfully.");
+        setSaving(true);
+        try {
+            // The API returns a new login token for the new email
+            const res = (await api.put("/api/auth/change-email", {
+                newEmail: nextEmail,
+                password: emailForm.password,
+            })) as unknown as { token: string; user: ApiProfile };
+            localStorage.setItem("accessToken", res.token);
+            await authService.me().catch(() => undefined);
+            applyProfile(toProfile(res.user));
+            setEmailForm({ email: "", password: "" });
+            setShowEmailModal(false);
+            toast.success("Email address updated successfully.");
+        } catch (error) {
+            toast.error(errorMessage(error, "Could not change your email."));
+        } finally {
+            setSaving(false);
+        }
     };
 
     const inputClass =
@@ -176,9 +309,41 @@ const Profile = () => {
                 <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
                     <aside className="h-fit rounded-2xl border border-app-border bg-white p-5 shadow-sm">
                         <div className="flex flex-col items-center text-center">
-                            <div className="flex size-24 items-center justify-center rounded-full bg-app-green text-3xl font-bold text-white shadow-sm">
-                                {profile.name.charAt(0).toUpperCase()}
+                            <div className="relative">
+                                <div className="flex size-24 items-center justify-center overflow-hidden rounded-full bg-app-green text-3xl font-bold text-white shadow-sm">
+                                    {profile.avatar ? (
+                                        <img src={photoUrl(profile.avatar)} alt={profile.name} className="size-full object-cover" />
+                                    ) : (
+                                        profile.name.charAt(0).toUpperCase()
+                                    )}
+                                </div>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp"
+                                    className="hidden"
+                                    onChange={handlePhotoChange}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    disabled={uploadingPhoto}
+                                    className="absolute bottom-0 right-0 flex size-8 items-center justify-center rounded-full border-2 border-white bg-app-orange text-white shadow transition hover:opacity-90 disabled:opacity-50"
+                                    aria-label="Change profile photo"
+                                >
+                                    <CameraIcon size={14} />
+                                </button>
                             </div>
+                            {profile.avatar && (
+                                <button
+                                    type="button"
+                                    onClick={handlePhotoRemove}
+                                    disabled={uploadingPhoto}
+                                    className="mt-3 flex items-center gap-1 text-xs font-medium text-zinc-500 transition hover:text-red-600 disabled:opacity-50"
+                                >
+                                    <Trash2Icon size={13} /> Remove photo
+                                </button>
+                            )}
                             <h2 className="mt-4 text-lg font-semibold text-zinc-900">{profile.name}</h2>
                             <p className="mt-1 break-all text-xs text-zinc-500">{profile.email}</p>
                         </div>

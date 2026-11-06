@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { useCart } from "../context/CartContext";
+import { api } from "../services/authServices";
 import { shopApi, shopError, useStoreSettings, priceSummary, refreshShopData, goToPayment, type SavedAddress, type ShopOrder } from "../services/shopApi";
 
 // ─── Payment Methods Type & Configuration ─────────────────────────────────────
@@ -40,19 +41,13 @@ interface DeliveryAddressOption {
     isDefault?: boolean;
 }
 
+// Delivery promise must match the chatbot and shop policy: usually 1 to 2 days
 const DELIVERY_TIME_SLOTS = [
     {
-        id: "express",
-        title: "Instant Express",
-        time: "30 – 45 Minutes",
-        badge: "Fastest ⚡",
-        fee: 0,
-    },
-    {
-        id: "today_evening",
-        title: "Today Evening",
-        time: "5:00 PM – 8:00 PM",
-        badge: "Scheduled",
+        id: "standard",
+        title: "Standard Delivery",
+        time: "Within 1 – 2 days",
+        badge: "Recommended 🚚",
         fee: 0,
     },
     {
@@ -62,7 +57,21 @@ const DELIVERY_TIME_SLOTS = [
         badge: "Fresh Batch 🌿",
         fee: 0,
     },
+    {
+        id: "tomorrow_evening",
+        title: "Tomorrow Evening",
+        time: "5:00 PM – 8:00 PM",
+        badge: "Scheduled",
+        fee: 0,
+    },
 ];
+
+// Active coupons from GET /api/coupons/active (shown as "Try:" suggestions)
+interface SuggestedCoupon {
+    code: string;
+    label: string;
+    minOrderAmount: number;
+}
 
 // ─── Payment Logos (Authentic SVGs) ───────────────────────────────────────────
 const EsewaLogo = () => (
@@ -178,7 +187,7 @@ const Checkout = () => {
     });
 
     // State: Delivery Slot
-    const [selectedSlot, setSelectedSlot] = useState<string>("express");
+    const [selectedSlot, setSelectedSlot] = useState<string>("standard");
 
     // State: Payment Method
     const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>("cod");
@@ -191,10 +200,10 @@ const Checkout = () => {
     // State: Khalti details
 
     // State: Card details
-    const [cardNumber, setCardNumber] = useState<string>("4242 •••• •••• 4242");
-    const [cardHolder, setCardHolder] = useState<string>("AAYUSH SHRESTHA");
-    const [cardExpiry, setCardExpiry] = useState<string>("08/28");
-    const [cardCvv, setCardCvv] = useState<string>("•••");
+    const [cardNumber, setCardNumber] = useState<string>("");
+    const [cardHolder, setCardHolder] = useState<string>("");
+    const [cardExpiry, setCardExpiry] = useState<string>("");
+    const [cardCvv, setCardCvv] = useState<string>("");
     const [saveCard, setSaveCard] = useState<boolean>(true);
 
     // State: Promo Code
@@ -206,6 +215,14 @@ const Checkout = () => {
         freeShipping: boolean;
     } | null>(null);
     const [checkingPromo, setCheckingPromo] = useState(false);
+    const [suggestedCoupons, setSuggestedCoupons] = useState<SuggestedCoupon[]>([]);
+
+    // Load coupons that really exist and are still valid (no more hard-coded codes)
+    useEffect(() => {
+        api.get("/api/coupons/active")
+            .then((list) => setSuggestedCoupons(list as unknown as SuggestedCoupon[]))
+            .catch(() => setSuggestedCoupons([]));
+    }, []);
 
     // State: Order note
     const [orderNotes, setOrderNotes] = useState<string>("");
@@ -320,6 +337,12 @@ const Checkout = () => {
                 : "Authorizing card payment..."
         );
 
+        // Tell the rider if the customer needs change (Cash on Delivery)
+        const codChangeNote =
+            paymentMethod === "cod" && codChangeOption !== "exact"
+                ? `Needs change for Rs. ${codChangeOption === "1000" ? "1,000" : "2,000"}`
+                : "";
+
         try {
             // Prices, stock, coupon, delivery fee and tax are all checked again by the server
             const order = await shopApi.placeOrder({
@@ -327,11 +350,11 @@ const Checkout = () => {
                 addressId: Number(activeAddress.id),
                 paymentMethod,
                 couponCode: appliedPromo?.code,
-                deliverySlot: DELIVERY_TIME_SLOTS.find((s) => s.id === selectedSlot)?.title || "Instant Express",
-                notes: orderNotes,
+                deliverySlot: DELIVERY_TIME_SLOTS.find((s) => s.id === selectedSlot)?.title || "Standard Delivery",
+                notes: [orderNotes.trim(), codChangeNote].filter(Boolean).join(" | ").slice(0, 500), // server limit
             });
-            clearCart();
-            refreshShopData();          // stock changed
+           await clearCart();
+           refreshShopData();       // stock changed
 
             // eSewa / Khalti: the order waits for payment; send the customer to the wallet
             if (paymentMethod === "esewa" || paymentMethod === "khalti") {
@@ -422,7 +445,9 @@ const Checkout = () => {
                                             <span className="size-2 rounded-full bg-emerald-500 animate-ping" />
                                         </div>
                                         <p className="text-base font-bold text-zinc-900">
-                                            Within 35 – 45 Minutes (Today)
+                                            {placedOrder.deliverySlot}
+                                            {" · "}
+                                            {DELIVERY_TIME_SLOTS.find((s) => s.title === placedOrder.deliverySlot)?.time ?? "Within 1 – 2 days"}
                                         </p>
                                     </div>
                                 </div>
@@ -563,8 +588,7 @@ const Checkout = () => {
             </div>
         );
     }
-
-    // ── Main Payment & Checkout Layout ────────────────────────────────────────
+        // ── Main Payment & Checkout Layout ────────────────────────────────────────
     return (
         <div className="min-h-screen bg-app-cream pb-24">
             {/* Progress Stepper Bar */}
@@ -1253,24 +1277,23 @@ const Checkout = () => {
                                             </button>
                                         </div>
 
-                                        {/* Preset coupon badges */}
-                                        <div className="flex flex-wrap gap-1.5 pt-1">
-                                            <span className="text-[11px] text-zinc-400 self-center">Try:</span>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleApplyPromo("PASAL10")}
-                                                className="text-[10px] font-mono font-bold text-app-orange bg-orange-50 hover:bg-orange-100 px-2 py-0.5 rounded border border-orange-200 transition-colors"
-                                            >
-                                                PASAL10 (10% OFF)
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleApplyPromo("WELCOME50")}
-                                                className="text-[10px] font-mono font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200 transition-colors"
-                                            >
-                                                WELCOME50 (Rs. 50 OFF)
-                                            </button>
-                                        </div>
+                                        {/* Coupon suggestions from the database (hidden when there are none) */}
+                                        {suggestedCoupons.length > 0 && (
+                                            <div className="flex flex-wrap gap-1.5 pt-1">
+                                                <span className="text-[11px] text-zinc-400 self-center">Try:</span>
+                                                {suggestedCoupons.map((c) => (
+                                                    <button
+                                                        key={c.code}
+                                                        type="button"
+                                                        onClick={() => handleApplyPromo(c.code)}
+                                                        title={c.minOrderAmount > 0 ? `Minimum order ${currency} ${c.minOrderAmount}` : undefined}
+                                                        className="text-[10px] font-mono font-bold text-app-orange bg-orange-50 hover:bg-orange-100 px-2 py-0.5 rounded border border-orange-200 transition-colors"
+                                                    >
+                                                        {c.code} ({c.label})
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 ) : (
                                     <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 flex items-center justify-between text-xs">
@@ -1375,7 +1398,7 @@ const Checkout = () => {
                             <div className="mt-4 pt-3 border-t border-zinc-100 flex items-center justify-center gap-3 text-[11px] text-zinc-400">
                                 <span>🔒 100% Buyer Protection</span>
                                 <span>•</span>
-                                <span>⚡ 45-Min Fast Delivery</span>
+                                <span>🚚 Delivery in 1 – 2 days</span>
                             </div>
                         </div>
                     </div>

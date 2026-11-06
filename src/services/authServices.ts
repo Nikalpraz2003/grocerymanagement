@@ -1,186 +1,339 @@
-import axios from 'axios';
 
-// .env:  VITE_API_BASE_URL=http://localhost:5080   (no /api at the end)
-// Empty = same origin, which works with the Vite proxy for /api
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+import axios from "axios";
+
+// .env: VITE_API_BASE_URL=http://localhost:5080
+// Do not add /api at the end.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 export const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: Number(import.meta.env.VITE_API_TIMEOUT) || 10000,
-  headers: { 'Content-Type': 'application/json' },
+    baseURL: API_BASE_URL,
+    timeout: Number(import.meta.env.VITE_API_TIMEOUT) || 10000,
+    headers: {
+        "Content-Type": "application/json",
+    },
 });
 
 // Add token to every request
 api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('accessToken');
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-    return config;
-  },
-  (error) => Promise.reject(error)
+    (config) => {
+        const token = localStorage.getItem("accessToken");
+
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`;
+        }
+
+        return config;
+    },
+    (error) => Promise.reject(error)
 );
 
-// Uploaded photos are saved as "/api/files/...". When the API is on another address
-// (VITE_API_BASE_URL set, e.g. after deploy), point those paths at the API server.
+// Fix relative image URLs returned by the API
 const fixFileUrls = (data: unknown): unknown => {
-  if (!API_BASE_URL) return data;
-  if (typeof data === 'string') return data.startsWith('/api/files/') ? API_BASE_URL + data : data;
-  if (Array.isArray(data)) return data.map(fixFileUrls);
-  if (data && typeof data === 'object') {
-    for (const k of Object.keys(data)) (data as Record<string, unknown>)[k] = fixFileUrls((data as Record<string, unknown>)[k]);
-  }
-  return data;
+    if (!API_BASE_URL) return data;
+
+    if (typeof data === "string") {
+        if (
+            data.startsWith("/api/files/") ||
+            data.startsWith("/api/profile/avatar/")
+        ) {
+            return API_BASE_URL + data;
+        }
+
+        return data;
+    }
+
+    if (Array.isArray(data)) {
+        return data.map(fixFileUrls);
+    }
+
+    if (data && typeof data === "object") {
+        const result = { ...data } as Record<string, unknown>;
+
+        for (const key of Object.keys(result)) {
+            result[key] = fixFileUrls(result[key]);
+        }
+
+        return result;
+    }
+
+    return data;
 };
 
-// Return response.data directly; on 401 (expired token) log out
+// Handle API responses and expired tokens
 api.interceptors.response.use(
-  (response) => (response.config.responseType === 'blob' ? response.data : fixFileUrls(response.data)),
-  (error) => {
-    const url: string = error.config?.url ?? '';
-    const isAuthCall = url.includes('/auth/login') || url.includes('/auth/register');
-    // Don't redirect when the login itself fails (wrong password) - just show the error
-    if (error.response?.status === 401 && !isAuthCall) {
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('user');
-      if (window.location.pathname !== '/login') window.location.href = '/login';
+    (response) => {
+        if (response.config.responseType === "blob") {
+            return response.data;
+        }
+
+        return fixFileUrls(response.data);
+    },
+    (error) => {
+        const url: string = error.config?.url ?? "";
+
+        const isAuthCall =
+            url.includes("/auth/login") ||
+            url.includes("/auth/register") ||
+            url.includes("/auth/forgot-password") ||
+            url.includes("/auth/reset-password");
+
+        if (error.response?.status === 401 && !isAuthCall) {
+            localStorage.removeItem("accessToken");
+            localStorage.removeItem("user");
+
+            notifyUserUpdated(null);
+
+            if (window.location.pathname !== "/login") {
+                window.location.href = "/login";
+            }
+        }
+
+        return Promise.reject(error);
     }
-    return Promise.reject(error);
-  }
 );
 
-// ---------- What the Pasalmandu API really returns ----------
+// ---------- API user response ----------
+
 interface ApiUser {
-  _id: string;
-  name: string;
-  email: string;
-  phone: string;
-  avatar: string;
-  role: string;          // "Admin" | "Vendor" | "Customer"
-  isAdmin: boolean;
-  isVendor: boolean;
+    _id: string;
+    name: string;
+    email: string;
+    phone?: string | null;
+    avatar?: string | null;
+    role: string;
+    isAdmin: boolean;
+    isVendor: boolean;
 }
 
 interface ApiAuthResponse {
-  token: string;
-  expiresAt: string;
-  user: ApiUser;
+    token: string;
+    expiresAt: string;
+    user: ApiUser;
 }
 
-// ---------- Shape the rest of the app uses ----------
+// ---------- Application user ----------
+
 export interface AppUser {
-  id: string;
-  _id: string;
-  email: string;
-  fullName: string;
-  name: string;
-  phone: string;
-  avatar: string;
-  roles: string[];
-  role: string;
-  isAdmin: boolean;
-  isVendor: boolean;
+    id: string;
+    _id: string;
+    email: string;
+    fullName: string;
+    name: string;
+    phone: string;
+    avatar: string;
+    roles: string[];
+    role: string;
+    isAdmin: boolean;
+    isVendor: boolean;
 }
 
 export interface LoginResponse {
-  accessToken: string;
-  expiresAt: string;
-  user: AppUser;
+    accessToken: string;
+    expiresAt: string;
+    user: AppUser;
 }
 
 export type RegisterResponse = LoginResponse;
 
+// Convert backend user into frontend user
 const toAppUser = (u: ApiUser): AppUser => ({
-  id: u._id,
-  _id: u._id,
-  email: u.email,
-  fullName: u.name,
-  name: u.name,
-  phone: u.phone ?? '',
-  avatar: u.avatar ?? '',
-  roles: [u.role],
-  role: u.role,
-  isAdmin: u.isAdmin,
-  isVendor: u.isVendor,
+    id: u._id,
+    _id: u._id,
+    email: u.email,
+    fullName: u.name,
+    name: u.name,
+    phone: u.phone ?? "",
+    avatar: u.avatar ?? "",
+    roles: [u.role],
+    role: u.role,
+    isAdmin: u.isAdmin,
+    isVendor: u.isVendor,
 });
 
-const saveSession = (res: ApiAuthResponse): LoginResponse => {
-  const result: LoginResponse = {
-    accessToken: res.token,
-    expiresAt: res.expiresAt,
-    user: toAppUser(res.user),
-  };
-  localStorage.setItem('accessToken', result.accessToken);
-  localStorage.setItem('user', JSON.stringify(result.user));
-  return result;
+// ---------- User synchronization ----------
+
+// Notify Navbar and other components when user information changes.
+export const notifyUserUpdated = (user: AppUser | null): void => {
+    if (typeof window === "undefined") return;
+
+    window.dispatchEvent(
+        new CustomEvent<AppUser | null>("pasalmandu:user-updated", {
+            detail: user,
+        })
+    );
 };
 
-// Turns any API error into { message: "..." } so Login.tsx can show it
-const toError = (error: any) => {
-  if (error.code === 'ERR_NETWORK' || !error.response) {
-    return { message: 'Cannot reach the server. Is the API running on http://localhost:5080?' };
-  }
-  const data = error.response.data;
-  if (data?.message) return { message: data.message };
-  if (data?.errors) {
-    const first = Object.values(data.errors as Record<string, string[]>).flat()[0];
-    if (first) return { message: first };
-  }
-  return { message: data?.title || `Request failed (${error.response.status})` };
+// Save login session
+const saveSession = (res: ApiAuthResponse): LoginResponse => {
+    const result: LoginResponse = {
+        accessToken: res.token,
+        expiresAt: res.expiresAt,
+        user: toAppUser(res.user),
+    };
+
+    localStorage.setItem("accessToken", result.accessToken);
+    localStorage.setItem("user", JSON.stringify(result.user));
+
+    notifyUserUpdated(result.user);
+
+    return result;
 };
+
+// Convert API errors into readable messages
+const toError = (error: any) => {
+    if (error.code === "ERR_NETWORK" || !error.response) {
+        return {
+            message:
+                "Cannot reach the server. Is the API running on http://localhost:5080?",
+        };
+    }
+
+    const data = error.response.data;
+
+    if (data?.message) {
+        return { message: data.message };
+    }
+
+    if (data?.errors) {
+        const first = Object.values(
+            data.errors as Record<string, string[]>
+        ).flat()[0];
+
+        if (first) {
+            return { message: first };
+        }
+    }
+
+    return {
+        message:
+            data?.title ||
+            `Request failed (${error.response.status})`,
+    };
+};
+
+// ---------- Authentication service ----------
 
 const authService = {
-  // Register new user (the API logs them in immediately)
-  register: async (email: string, password: string, fullName: string): Promise<RegisterResponse> => {
-    try {
-      const res = (await api.post('/api/auth/register', {
-        name: fullName,
-        email,
-        password,
-        confirmPassword: password,
-      })) as unknown as ApiAuthResponse;
-      return saveSession(res);
-    } catch (error: any) {
-      throw toError(error);
-    }
-  },
+    // Register user
+    register: async (
+        email: string,
+        password: string,
+        fullName: string
+    ): Promise<void> => {
+        try {
+            await api.post("/api/auth/register", {
+                name: fullName,
+                email,
+                password,
+                confirmPassword: password,
+            });
+        } catch (error: any) {
+            throw toError(error);
+        }
+    },
 
-  // Login user
-  login: async (email: string, password: string): Promise<LoginResponse> => {
-    try {
-      const res = (await api.post('/api/auth/login', { email, password })) as unknown as ApiAuthResponse;
-      return saveSession(res);
-    } catch (error: any) {
-      throw toError(error);
-    }
-  },
+    // Login user
+    login: async (
+        email: string,
+        password: string
+    ): Promise<LoginResponse> => {
+        try {
+            const res = (await api.post(
+                "/api/auth/login",
+                { email, password }
+            )) as unknown as ApiAuthResponse;
 
-  // Refresh the saved user from the API (call on app start if logged in)
-  me: async (): Promise<AppUser> => {
-    const u = (await api.get('/api/auth/me')) as unknown as ApiUser;
-    const user = toAppUser(u);
-    localStorage.setItem('user', JSON.stringify(user));
-    return user;
-  },
+            return saveSession(res);
+        } catch (error: any) {
+            throw toError(error);
+        }
+    },
 
-  logout: () => {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('user');
-  },
+    // Refresh logged-in user from backend
+    me: async (): Promise<AppUser> => {
+        const u = (await api.get(
+            "/api/auth/me"
+        )) as unknown as ApiUser;
 
-  getCurrentUser: (): AppUser | null => {
-    try {
-      const user = localStorage.getItem('user');
-      return user ? (JSON.parse(user) as AppUser) : null;
-    } catch {
-      return null;
-    }
-  },
+        const user = toAppUser(u);
 
-  getToken: () => localStorage.getItem('accessToken'),
+        localStorage.setItem("user", JSON.stringify(user));
 
-  isAuthenticated: () => !!localStorage.getItem('accessToken'),
+        // Immediately update Navbar
+        notifyUserUpdated(user);
 
-  isAdmin: () => !!authService.getCurrentUser()?.isAdmin,
+        return user;
+    },
+
+    // Forgot password
+    forgotPassword: async (
+        email: string
+    ): Promise<{ message: string }> => {
+        try {
+            const res = (await api.post(
+                "/api/auth/forgot-password",
+                { email }
+            )) as unknown as { message?: string };
+
+            return {
+                message:
+                    res?.message ??
+                    "If this email is registered, a reset link has been sent.",
+            };
+        } catch (error: any) {
+            throw toError(error);
+        }
+    },
+
+    // Reset password
+    resetPassword: async (
+        email: string,
+        code: string,
+        newPassword: string
+    ): Promise<{ message: string }> => {
+        try {
+            const res = (await api.post(
+                "/api/auth/reset-password",
+                {
+                    email,
+                    code,
+                    newPassword,
+                    confirmPassword: newPassword,
+                }
+            )) as unknown as { message?: string };
+
+            return {
+                message: res?.message ?? "Your password has been reset.",
+            };
+        } catch (error: any) {
+            throw toError(error);
+        }
+    },
+
+    // Logout
+    logout: (): void => {
+        localStorage.removeItem("accessToken");
+        localStorage.removeItem("user");
+
+        notifyUserUpdated(null);
+    },
+
+    // Get currently logged-in user
+    getCurrentUser: (): AppUser | null => {
+        try {
+            const user = localStorage.getItem("user");
+
+            return user ? (JSON.parse(user) as AppUser) : null;
+        } catch {
+            return null;
+        }
+    },
+
+    getToken: () => localStorage.getItem("accessToken"),
+
+    isAuthenticated: () => !!localStorage.getItem("accessToken"),
+
+    isAdmin: () => !!authService.getCurrentUser()?.isAdmin,
 };
 
 export default authService;
